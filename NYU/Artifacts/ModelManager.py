@@ -27,7 +27,7 @@ import copy;
 class model_manager:
     # MODEL_DIR='/Users/yzhao11/Documents/Research/MachineLearning/Models/';
     # MODEL_DIR='/u/erdos/yzhao11/NYU/Models/';
-    MODEL_DIR='/home/ossowskj/NYU/Models/';
+    MODEL_DIR= os.path.expanduser('~')+'/NYU/Models/';
     def __init__(self, name, x_file, y_file,
                  model_dir = MODEL_DIR,
                  train_frac = 0.7,
@@ -211,7 +211,8 @@ class model_manager:
 #############################################################################
 #############################################################################
 if 0:
-    DATA_DIR = '/home/ossowskj/NYU/ArtifactsData/';
+    #DATA_DIR = '/home/ossowskj/NYU/ArtifactsData/';
+    DATA_DIR = os.path.expanduser('~') + '/NYU/ArtifactsData/';
     X_FILE   = DATA_DIR + 'mngl_test.npz';
     Y_FILE   = DATA_DIR + 'orig_test.npz';
     
