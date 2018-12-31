@@ -9,17 +9,38 @@ import nibabel as nib;
 import matplotlib.pyplot as plt;
 import numpy as np;
 import sys;
+import copy;
 
 from ipywidgets import interact, interactive, fixed, interact_manual
 import ipywidgets as widgets
 
 class mri_scan:
-    def __init__(self, path):
-        self.W_MAX = 10000;
-        self.H_MAX = 10000;
+    def __init__(self, path = None):  # path = None should never be used
+        self.W_MAX = 10000;           # in day to day task; introduced here only
+        self.H_MAX = 10000;           # for internal purposes
         self.path = path;
-        self.img  = nib.load(path);
-        self.x_max, self.y_max, self.z_max = self.img.shape;
+        if (path is not None):
+            self.img  = nib.load(path);
+            self.x_max, self.y_max, self.z_max = self.img.shape;
+            
+    class user_data:
+        def __init__(self, name, data):
+            self.name    = name;
+            self.dataobj = data;
+    
+    @classmethod
+    def copy_scan(cls, old_inst, copy_img = True):
+        new_inst = cls(path=None);
+        new_inst.path  = old_inst.path;
+        
+        if (copy_img == True):
+            new_inst.img = copy.deepcopy(old_inst.img);
+        else:
+            new_inst.img = mri_scan.user_data('data_holder', []);
+            
+        new_inst.x_max, new_inst.y_max, new_inst.z_max = [old_inst.x_max, old_inst.y_max, old_inst.z_max];
+        return new_inst;
+        
         
     def dim(self):
         return [ self.z_max, self.y_max, self.x_max];
