@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt;
 import Loader as ld;
 import Transformer as td;
 from matplotlib.widgets import Slider;
+import ImagePairCheck as ipc;
 
 """
 The idea for this class is to apply lots of convolutions to an image and see
@@ -867,6 +868,10 @@ DD5 = np.flip(DD4, axis=1);
 """
 Given an array, reflects the value of each entry over the horizontal line
 cutting the array in half.
+Input:
+    arr: A numpy 2d array
+Return:
+    A different numpy 2d array corresponding to the reflected image
 """
 def flip_vertical(arr):
     kernel = np.copy(arr)
@@ -879,6 +884,10 @@ def flip_vertical(arr):
 """
 Given an array, reflects the value of each entry over the vertical line
 cutting the array in half.
+Input:
+   arr: A numpy 2d array
+Return:
+    A different numpy 2d array corresponding to the reflected image
 """
 def flip_horizontal(arr):
     kernel = np.copy(arr)
@@ -890,6 +899,10 @@ def flip_horizontal(arr):
 
 """
 Given an array, reflect each point through the origin (center element)
+Input:
+    arr: A numpy 2d array
+Return:
+    A different numpy 2d array corresponding to the reflected image
 """
 def flip_through_origin(arr):
     return flip_vertical(flip_horizontal(arr))
@@ -897,6 +910,10 @@ def flip_through_origin(arr):
 
 """
 Generate random kernels according to parametric equations
+Input:
+    None
+Return:
+    A list of numpy 2d arrays, each entry is a 2D kernel
 """
 def generate_random_kernels():
     num_curves = 9
@@ -919,9 +936,18 @@ def generate_random_kernels():
     return generate_kernels_parametric(16, num_curves, points_per_kernel, radius1, radius2, [coeff1, coeff2], interval)
 
 """
-Generates a random kernel by taking a slice of a parametric equation of the form
+Generates a list of 2D kernels by taking time slices of a parametric equation of the form
 x = c + a * sin(b * pi * t)
 y = d + e * cos(f * pi * t)
+Input:
+    size: The width and height of the kernel
+    num_curves: The number of kernels to generate
+    points_per_kernel: The number of activation points in each kernel
+    radius1: The maximum radius of the curve along the x direction (a in the equation)
+    radius2: The maximum radius of the curve along the y direction (e in the equation)
+    coeff: A list of length 2 corresponding to coefficients b,f respectively
+    interval: A list of length 2 denoting the minimum time value, and the maximum time
+    value in that order
 """
 def generate_kernels_parametric(size, num_curves, points_per_kernel, radius1, radius2, coeff = [6,5], interval = [0, 2 * np.pi]):
     kernels = []
@@ -930,15 +956,17 @@ def generate_kernels_parametric(size, num_curves, points_per_kernel, radius1, ra
     for k in range(len(starts)-1):
         arr = np.copy(kernel)
         t = np.linspace(starts[k],starts[k+1], points_per_kernel)
-        y = radius1 * np.cos(coeff[1] * np.pi * t) + size/2
-        x = radius2 * np.sin(coeff[0] * np.pi * t) + size/2
+        y = radius2 * np.cos(coeff[1] * np.pi * t) + size/2
+        x = radius1 * np.sin(coeff[0] * np.pi * t) + size/2
         for i in range(len(t)):
             arr[min(int(x[i]),15),min(int(y[i]),15)] = 1
-        kernels.append(arr)
+        kernels.append(arr/points_per_kernel)
     return np.array(kernels)
 
 
 """
+Generates N distorted images based on a single clear image by convolving it 
+with random 2D kernels
 Input: A numpy 2D array: img
        Number of distorted images to generate: N
 Output: An image array storing the distorted images. Shape is (img.x,img.y,N)
@@ -957,16 +985,24 @@ def generate_distorted_images(img, N):
                 tmp = len(kernels);
                 kernels.add(random_kernels.tostring());
                 if len(kernels) != tmp:
-                    imarr[:,:,tmp] = signal.convolve2d(img, kernel, boundary = 'symm', mode='same');
+                    image = signal.convolve2d(img, kernel, boundary = 'symm', mode='same');
+                    imarr[:,:,tmp] = td.Transformer.hist_match(image,img);
 
     return imarr;
 
 if __name__ == "__main__":
     mri = ld.mri_scan(MRI_PATH + SCAN);
     img = mri.get_image(80, 'y');
-    generate_distorted_images(img,4000);
-    kernels = generate_random_kernels()
-    cV.display(kernels, 0, 9, show_kernel=True);
+    imarr = generate_distorted_images(img,10);
+    img = np.repeat(img[:, :, np.newaxis], 10, axis=2)
+    #print(np.reshape(np.array(list(img) * 10), (img.shape[0], img.shape[1], 10)).shape)
+    #print(imarr.shape
+    #print(np.tile(img, (len(imarr),1,1)).shape)
+    VRF = ipc.verifier(img, imarr);
+    VRF.initialize();
+    plt.show();
+    # kernels = generate_random_kernels()
+    # cV.display(kernels, 0, 9, show_kernel=True);
 
 
 
