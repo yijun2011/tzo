@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt;
 import Loader as ld;
 import Transformer as td;
 from matplotlib.widgets import Slider;
+from mpl_toolkits.mplot3d import Axes3D;
 import ImagePairCheck as ipc;
 
 """
@@ -871,7 +872,7 @@ cutting the array in half.
 Input:
     arr: A numpy 2d array
 Return:
-    A different numpy 2d array corresponding to the reflected image
+    A different numpy 2d array
 """
 def flip_vertical(arr):
     kernel = np.copy(arr)
@@ -887,7 +888,7 @@ cutting the array in half.
 Input:
    arr: A numpy 2d array
 Return:
-    A different numpy 2d array corresponding to the reflected image
+    A different numpy 2d array
 """
 def flip_horizontal(arr):
     kernel = np.copy(arr)
@@ -902,7 +903,7 @@ Given an array, reflect each point through the origin (center element)
 Input:
     arr: A numpy 2d array
 Return:
-    A different numpy 2d array corresponding to the reflected image
+    A different numpy 2d array
 """
 def flip_through_origin(arr):
     return flip_vertical(flip_horizontal(arr))
@@ -913,7 +914,7 @@ Generate random kernels according to parametric equations
 Input:
     None
 Return:
-    A list of numpy 2d arrays, each entry is a 2D kernel
+    A list of numpy 2d arrays
 """
 def generate_random_kernels():
     num_curves = 9
@@ -990,19 +991,192 @@ def generate_distorted_images(img, N):
 
     return imarr;
 
+
+"""
+A class representing a window mask.
+
+Constructor:
+    m: positive integer height of the mask
+    n: positive integer width of the mask
+    offset: location of the maximum value in the mask relative to
+    the center
+    exponent: Exponent in the super gaussian equation
+    kappa: constant kappa in the super gaussian equation
+"""
+class Mask:
+    def __init__(self, m, n, offset, exponent, kappa):
+        self.height = m;
+        self.width = n;
+        self.offset = offset;
+        self.exponent = exponent;
+        self.kappa = kappa;
+        self.mask = self.generate_blend_mask(m,n,offset,exponent,kappa);
+        
+        
+
+    """
+    Generates a window according to the Super-Gaussian formula:
+    If the maximum value occurs at the point (x,y):
+
+    w(u,v) = e ^ (([-((r_uv) ** n)] / k)
+    r_uv = sqrt(r_u ** 2 + r_v ** 2)
+    r_u = u/x - 1
+    r_v = v/y - 1
+
+    Input:
+        m: integer height of the mask
+        n: integer width of the mask
+        offset: list of integers offset of mask in x and y direction
+        exponent: The exponent (n) in the formula
+        kappa: The constant (k) in the formula
+    Output:
+        2D numpy array representing the mask
+    """
+    @staticmethod
+    def generate_blend_mask(m,n,offset,exponent,kappa):
+        mask = np.zeros((m,n));
+        for i in range(m):
+            for j in range(n):
+                r_u = i/(m/2) - 1;
+                r_v = j/(n/2) - 1;
+                r_uv = np.sqrt(r_u**2 + r_v**2);
+                new_x = i - offset[0];
+                new_y = j - offset[1];
+                if (-1 < new_x < m and -1 < new_y < n):
+                    mask[new_x,new_y] = np.exp(-(r_uv**exponent)/kappa);
+        return mask
+
+    """
+    Applies a mask to both an original and convolved image. NOTE: this modifies the
+    convolved image in place.
+
+    Input:
+        orig: 2D real valued numpy array representing the original image
+        convolved: 2D real valued numpy array representing the convolved image
+        mask: A 2D real valued numpy array representing the mask
+    Output:
+        The result of applying the mask to the distorted and original image
+    """
+    def apply_mask(self,orig,convolved):
+        for i in range(len(convolved)):
+            for j in range(len(convolved[0])):
+                convolved[i][j] = self.mask[i][j] * convolved[i][j] + (1 - self.mask[i][j]) * orig[i][j];
+        return convolved;
+    
+    """
+    Plots the mask associated with this class
+    """
+    def plot_mask(self):
+        self.fig = plt.figure();
+        self.ax = self.fig.add_subplot(111,projection='3d');
+
+
+        axcolor = 'lightgoldenrodyellow'
+        kappa_slider_pos = plt.axes([0.18, 0.07, 0.65, 0.03], facecolor=axcolor);
+        kappa_slider = Slider(kappa_slider_pos, 'Kappa', 0, 1, valinit=0.5);
+        exponent_slider_pos = plt.axes([0.18, 0.12, 0.65, 0.03], facecolor=axcolor);
+        exponent_slider = Slider(exponent_slider_pos, 'Exponent', 1, 10, valinit=3);
+
+        y = np.arange(len(self.mask))
+        x = np.arange(len(self.mask[0]))
+        self.X,self.Y = np.meshgrid(x,y);
+        self.surf = self.ax.plot_surface(self.X,self.Y,self.mask);
+
+        kappa_slider.on_changed(self.update_kappa);
+        exponent_slider.on_changed(self.update_exponent);
+
+        plt.show();
+
+    def update_kappa(self,val):
+        self.kappa = val;
+        self.mask = self.generate_blend_mask(self.height, self.width, self.offset, self.exponent, val);
+        y = np.arange(len(self.mask))
+        x = np.arange(len(self.mask[0]))
+        self.X,self.Y = np.meshgrid(x,y);
+        self.surf.remove();
+        self.surf = self.ax.plot_surface(self.X,self.Y,self.mask, color = 'BLUE');
+        self.fig.canvas.draw();
+    
+    def update_exponent(self,val):
+        self.exponent = val;
+        self.mask = self.generate_blend_mask(self.height, self.width, self.offset, val, self.kappa);
+        y = np.arange(len(self.mask))
+        x = np.arange(len(self.mask[0]))
+        self.X,self.Y = np.meshgrid(x,y);
+        self.surf.remove();
+        self.surf = self.ax.plot_surface(self.X,self.Y,self.mask, color = 'BLUE');
+        self.fig.canvas.draw();
+
+
+    """
+    Shows the mask in a 3D plot.
+
+    Input:
+        A 2D numpy array representing the mask
+    Output:
+        None
+
+    """
+    def show_mask(self):
+        y = np.arange(len(self.mask))
+        x = np.arange(len(self.mask[0]))
+        fig = plt.figure();
+        ax = fig.add_subplot(111,projection='3d');
+        axcolor = 'lightgoldenrodyellow'
+        kappa_slider_pos = plt.axes([0.18, 0.07, 0.65, 0.03], facecolor=axcolor);
+        x_slider = Slider(kappa_slider_pos, 'X', 0, 1, valinit=0.5);
+        X,Y = np.meshgrid(x,y);
+        ax.plot_surface(X,Y,self.mask);
+        plt.show();
+
+
+"""
+Generate N random distortionts of an original image based on blending with
+a windowed mask.
+
+Input: A numpy 2D array: img
+       Number of distorted images to generate: N
+Output: An image array storing the distorted images. Shape is (img.x,img.y,N)
+"""
+def generate_blended_distorted_images(img, N):
+    x,y = img.shape;
+    imarr = np.zeros((x,y,N));
+    
+    kernels = set();
+    while len(kernels) < N:
+        if (len(kernels) % 500 == 0):
+            print("Convolved " + str(len(kernels)) + " images");
+        random_kernels = generate_random_kernels();
+        for kernel in random_kernels:
+            if (len(kernels) < N):
+                tmp = len(kernels);
+                kernels.add(random_kernels.tostring());
+                if len(kernels) != tmp:
+                    x1 = np.random.randint(-int(x/4), int(x/4))
+                    x2 = np.random.randint(-int(y/4), int(y/4))
+                    mask = Mask(x,y, [x1,x2],np.random.uniform(2, 7),0.03);
+                    image = signal.convolve2d(img, kernel, boundary = 'symm', mode='same');
+                    image = mask.apply_mask(img, image);
+                    imarr[:,:,tmp] = td.Transformer.hist_match(image,img);
+
+    return imarr;
+
+
 if __name__ == "__main__":
-    mri = ld.mri_scan(MRI_PATH + SCAN);
-    img = mri.get_image(80, 'y');
-    imarr = generate_distorted_images(img,10);
-    img = np.repeat(img[:, :, np.newaxis], 10, axis=2)
-    #print(np.reshape(np.array(list(img) * 10), (img.shape[0], img.shape[1], 10)).shape)
-    #print(imarr.shape
-    #print(np.tile(img, (len(imarr),1,1)).shape)
-    VRF = ipc.verifier(img, imarr);
-    VRF.initialize();
-    plt.show();
-    # kernels = generate_random_kernels()
-    # cV.display(kernels, 0, 9, show_kernel=True);
+    print("hello");
+    #a = np.random.randint(1,10) / 10;
+    #m = Mask(30,30,[0,0],5, 0.03);
+    #show_mask(generate_blend_mask(30,30,[15,15],3, 0.025));
+    # mri = ld.mri_scan(MRI_PATH + SCAN);
+    # img = mri.get_image(100, 'x');
+    # imarr = generate_blended_distorted_images(img,10);
+
+    # img = np.repeat(img[:, :, np.newaxis], 10, axis=2)
+
+    # VRF = ipc.verifier(img, imarr);
+    # VRF.initialize();
+    # plt.show();
+
 
 
 
