@@ -17,8 +17,10 @@ import matplotlib.pyplot as plt;
 import Loader as ld;
 import Transformer as td;
 from matplotlib.widgets import Slider;
+from scipy.linalg import circulant
 from mpl_toolkits.mplot3d import Axes3D;
-import ImagePairCheck as ipc;
+
+
 
 """
 The idea for this class is to apply lots of convolutions to an image and see
@@ -33,7 +35,7 @@ class convolver:
             print ('convolver.convolver: the size of the kernel should be >= 2.',
                    sys.stderr);
             sys.exit(-1);
-
+            
         self.img_     = image;
         self.size_    = size;
 
@@ -89,6 +91,7 @@ class convolver:
 
         return window/len(final_choice);
 
+
     """
     This function generates random convolutions and outputs them in a 3d array
     """
@@ -96,6 +99,7 @@ class convolver:
     def _generate_random_convolutions(self, non_zeros, num_conv, seeded = True):
         if seeded:
             np.random.seed(1000);
+
         non_zeros = int(non_zeros);
         if (non_zeros <= 0):
             print('convolver.convolver: the number of non zero elements must be > 0.',
@@ -118,8 +122,10 @@ class convolver:
         return conv_arr;
 
     """
-    This function generates perturbed linear convolutions (by Gaussian noise)
+    This function generates perturbed linear convolutions (perturbed by Gaussian noise),
+    that is ones whose non_zero entries in the kernel form a line
     """
+
 
     def _generate_random_lconv(self, non_zeros, num_conv, max_a = 3 , sigma = 0.5, seeded = True):
         if seeded:
@@ -141,14 +147,219 @@ class convolver:
             SS = np.sum(conv_arr[s,:,:]);
             print ('Dividing by '+ str(SS))
             conv_arr[s, :, :] = conv_arr[s,:,:] * (1.0/float(SS));
+        
+        return conv_arr; 
+    
+    """
+    Auxiliary function to extract a submatrix S from a given image. The retrieved
+    submatrix is intended to be later convolved with the given kernel.
+    S's size will be the same as that of K and S's entries will
+    depend on the pixel around which S is centered. If S "sticks" out of the image, 0's will
+    be used as image's pixel values.
+    
+    kernel  -- the kernel which (later) will be convolved with the image
+    pixel_x -- row of the point in the image over which kernel's center is superimposed
+    pixel_y -- column of the point in the image over which kernel's center is superimposed
+    
+    """
+    def _get_phantom_submatrix(self, kernel, pixel_x, pixel_y):
+        K, ignore = kernel.shape;
+        phantom = np.zeros([K, K]);
+        
+        i  = pixel_x; j = pixel_y;
+        C  = int(np.ceil((K/2) - 1));
+        C_ = int(np.floor(K/2));
+        
+        N, M = self.img_.shape;
+        
+        # Let's fill the matrix 
+        for s in np.arange(-C, C_+1):
+            if (i + s < 0 or i + s > N - 1 ):
+                continue;
+            for r in np.arange(-C, C+1):
+                if (j + r < 0 or j + r > M - 1):
+                    continue;
+                phantom[C+s, C+r] = self.img_[i+s, j+r];
+                
+        return phantom;
+    
+    # Flip a matrix about diagonal
+    @staticmethod
+    def _flip_diag(matrix, diag):
+        N, M = matrix.shape;
+        new_matrix = np.zeros([N, M]);
+        [idx_x, idx_y] = np.nonzero(matrix);
+        K = len(idx_x);
+        
+        if (diag == 'NE'): # Top points to NE
+            for k in np.arange(K):
+                new_matrix[N - idx_x[k]-1, M - idx_y[k] - 1] = \
+                matrix[idx_x[k], idx_y[k]];
+        else:
+             new_matrix = np.transpose(matrix);
+                
+        return new_matrix;
+                
+        
+    def _convolve_pixel(self, kernel, pixel_x, pixel_y, diag_flip = False):
+        if (diag_flip):
+            kernel = convolver._flip_diag(kernel, 'NE');
+        phantom = self._get_phantom_submatrix(kernel, pixel_x, pixel_y);
+        res = np.multiply(kernel, phantom);
+#        print('res is:')
+#        print(res);
+#        print('\n');
+#        print(np.sum(res));
+#        print('\n');
+        res = np.sum(np.sum(res));
+        return(res);
+        
+        
+        
+    @staticmethod
+    def _rotate_ccw(kernel, angle_rad):
+        K, ignore = kernel.shape;
+        new_kernel = np.zeros([K, K]);
+        NN = np.count_nonzero(kernel);
+          
+        C  = int(np.ceil((K/2) - 1));
+        C_ = int(np.floor(K/2));
+          
+        for s in np.arange(-C, C_+1):
+            for r in np.arange(-C, C_+1):
+                  # Need to use ceil/floor and eliminate value that stick out
+                  # of the kernel
+                s_ = np.rint(s*np.cos(angle_rad) + r*np.sin(angle_rad));
+                r_ = np.rint(-s*np.sin(angle_rad) + r*np.cos(angle_rad));
+                # I am taking advange of the fact that entries of the
+                # kernel are >= 0
+                if (C + s_ >= 0 and C + s_ < K and
+                    C + r_ >= 0 and C + r_ < K and
+                    np.count_nonzero(new_kernel) <= NN):
+                    new_kernel[C+s, C+r] = kernel[int(C + s_), int(C + r_)];
+                else:
+                    new_kernel[C+s, C+r] = 0;
 
-        return conv_arr;
+        # Make sure that the entries of a kernel add up to 1
+        ss = np.sum(new_kernel);
+        new_kernel /= ss;
+        return new_kernel;
+    
+    """
+    We're given an N x M image (matrix) I and a point (i, j) in it. We define
+    "center" MID of I as  MID = (R, C) where C = ceil( (M/2) - 1  ) (Note that R is
+    really intended to be >= N )
+    
+    We want to know what is the angle < pi formed by 1) the vertical line passing 
+    through MID and 2) the line passing through MID and the point (p, q). Directions
+    to the left from the line 1) are positive, while those to the right negative.
+    """
+                
+    def _get_angle(self, pixel_x, pixel_y, R): # R should be N
+        i = pixel_x;
+        j = pixel_y;
+        
+        N, M  = self.img_.shape;
+        C     =   int(np.ceil((M/2) - 1));
+        sign  = np.sign(C - j);
+        hpnse = np.sqrt( (C-j)**2 + (R-i)**2);
+        adjcn = R - i;
+        
+        angle = 0;
+        if (hpnse != 0):
+            angle = np.arccos(adjcn/hpnse);
+        return(sign * angle);
 
     """
-    Display convolutions in a grid
+    Let's assume that the image width is M. As in the _get_angle function, we define
+    the special center as a point MID = (radius, M/2 ). 
+    This function shrinks the kernel in way that is proportional to the distance
+    between the kernel center (p, q) and the MID. That is at the kernel gets
+    smaller and smaller as we approach MID at which point its support becomes
+    a single point (the kernel's center).
+    """
+    def _shrink_kernel(self, kernel, pixel_x, pixel_y, R):
+        p = pixel_x;
+        q = pixel_y;
+        
+        N, M  = self.img_.shape;
+        C     =   int(np.ceil((M/2) - 1)); 
+        
+        # The distance of the tl vertex to the MID point
+        MX = np.sqrt(C**2 + N**2);
+        DX = np.sqrt((C - q)**2 + (R - p)**2);
+        ratio = DX/MX;
+        
+        # Now apply the "ratio" to the (square) kernel
+        K, ignore = kernel.shape;
+        Ck  = int(np.ceil((K/2) - 1));
+        Ck_ = int(np.floor((K/2)));
+        nnz_arr = np.nonzero(kernel);
+        nnz_x = nnz_arr[0];
+        nnz_y = nnz_arr[1];
+        new_kernel = np.zeros([K, K]);
+        for i in np.arange(len(nnz_x)):
+            new_u = Ck  + int(np.rint(ratio*(nnz_x[i] - Ck)));
+            new_v = Ck_ + int(np.rint(ratio*(nnz_y[i] - Ck_)));
+            new_kernel[new_u, new_v] = kernel[nnz_x[i], nnz_y[i]];
+        
+        
+        # Make sure that the entries of a kernel add up to 1
+        ss = np.sum(new_kernel);
+        new_kernel /= ss;
+        return new_kernel;
+    
+    """
+    Rotation and shrinking is applied to the given kernel. The parameters 
+    of rotation depend on the pixel in the image we are over, and the the 
+    position of the MID (the center referred to in the above functions)
+    """
+    def _symmetric_precession(self, kernel, pixel_x, pixel_y, R):
+         angle   = self._get_angle(pixel_x, pixel_y, R);
+         kernel1 = self._rotate_ccw(kernel, angle);
+         kernel2 = self._shrink_kernel(kernel1, pixel_x, pixel_y, R);
+         return kernel2;
+        
+    """
+    Given a kernel apply it to the underlying image in a convolution like manner,
+    but the kernel is morphed as we slide it over the matrix. Let's say that the
+    size of the image is N.
+    
+    1) The kernel is not modifed at pixel (0, N/2) and for all rows i > radius
+       (radius is a peramater and generally is thought to be > N)
+                
+    2) As we deviate from the line j = N/2 the kernel's support is rotated by the
+       angle proportional to the angle between the following two lines:
+           a) theline formed by the convolved pixel and point with coordinagtes
+              (radius, N/2)  (the value of radius is intended to be > N)
+           b) the vertical line j = N/2
+
+    3) Good to have: to account for the limited angular rotation of a human head, we cap
+       the angle of rotation at the value that comes from the deviation angle of
+       arctan[ (N/2 / radius) ] (angle given by the tl corner of the image)
+       
+    4) As the convolved pixel moves from row i = 0 to row i = radius, the support of
+       the kerner shrinks "perspectively" along the line connecting the convolved
+       pixel and the point (radius, N/2);
+    """
+    def var_convolve(self, kernel, precession_func, user_data = None):
+        N, M = self.img_.shape;
+        new_image = np.zeros([N, M]);
+        for p in np.arange(N):
+            for q in np.arange(N):
+                kern_local = precession_func(kernel, p, q, user_data);
+                val = self._convolve_pixel(kern_local, p, q);
+                new_image[p, q] = val;
+                
+        return new_image;
+        
+    """
+    Display convolutions with kernels givven conv_arr in a grid form.
+    That is both the kernel and its effect on the underlying image will be shown
+    by matplotlib in a grid form.
+
     """
     def display(self, conv_arr, start_idx, num, show_kernel = False):
-
         total_num_img, x, y = conv_arr.shape;
         if (start_idx + num > total_num_img):
             print('convolver.display: the staring image and the number of images reach past the end of the array.',
@@ -164,7 +375,7 @@ class convolver:
         Q = 0;
 
         if (show_kernel):
-            Q = 1;
+            Q = 1; 
 
         fig, axarr = plt.subplots(D, (Q+1)*D, figsize=(12, 12));
         for q in range(D):
@@ -181,10 +392,9 @@ class convolver:
         plt.tight_layout();
         plt.show();
 
-
     """
     This funcion  applies a single kernel to the internal image and then displays
-    the kernel, the original image, the convolved image, and the the
+    the kernel, the original image, the convolved image, and the
     log spectrum of the convolved image.
     """
     def display_single(self, kernel):
@@ -207,7 +417,7 @@ class convolver:
     """
     def tuner(self, kernel):
          m, n = kernel.shape;
-
+         
          if (m != self.size_ or n != self.size_):
              print('convolver.tuner: the kernel must be of size (' + str(self.size_) + ', ' +  str(self.size_) + ').',
                    sys.stderr);
@@ -222,6 +432,7 @@ class convolver:
              return;
 
          self.my_kernel = kernel;
+
          # Find positions of the non zeros
          self.non_zeros = [];
          for xx in np.arange(self.size_):
@@ -230,12 +441,11 @@ class convolver:
                      self.non_zeros.append(np.array([xx,yy]));
 
          self.img_conv = signal.convolve2d(self.img_, kernel, boundary = 'symm', mode='same');
+
          tF = td.Transformer(self.img_);
          self.img_frr  = tF.get_ft_spectrum();
-
          self.fig, self.ax = plt.subplots(1, 4, figsize=(23, 9));
          self.fig.subplots_adjust(bottom=0.35, left=0.02, top=0.97, right=0.98)
-
          self.ax[0].imshow(self.my_kernel, aspect='equal');
          self.ax[1].imshow(self.img_conv, aspect='equal');
          self.ax[2].imshow(self.img_frr, aspect='equal');
@@ -256,615 +466,16 @@ class convolver:
         print ('The slider no is: ' + str(slider_no));
         [u, v] = self.non_zeros[slider_no];
         self.my_kernel[u, v] = val;
-
         self.img_conv = signal.convolve2d(self.img_, self.my_kernel, boundary = 'symm', mode='same');
+
         tF = td.Transformer(self.img_);
         self.img_frr  = tF.get_ft_spectrum();
-
         self.ax[0].imshow(self.my_kernel);
         self.ax[1].imshow(self.img_conv);
         self.ax[2].imshow(self.img_frr);
         self.ax[3].imshow(self.img_);
         print(repr(self.my_kernel))
         self.fig.canvas.draw_idle();
-
-##############################################################################
-##############################################################################
-
-# MRI_PATH = '/Users/yzhao11/Documents/Research/MachineLearning/Coregistered/';
-# SCAN = 'aligned188ToNoMotionRun01.nii'
-
-# MRI_PATH='/Users/yzhao11/Documents/Research/MachineLearning/MRI/zhao_dataset_20181011/sub-NC188/ses-20180825/anat/';
-# SCAN = 'sub-NC188_ses-20180825_acq-nomotion_run-01_T1w.nii';
-
-"""
-Tim's Computer
-"""
-#MRI_PATH='/Users/Tim/Desktop/Code/Machine_Learning/TZO/NYU/zhao_dataset_20181011/sub-NC183/ses-20180825/anat/';
-#SCAN = 'sub-NC183_ses-20180825_acq-nomotion_run-02_T1w.nii';
-MRI_PATH='/Users/Tim/Desktop/Code/Machine_Learning/TZO/NYU/zhao_dataset_20181011/sub-NC189/ses-20180825/anat/'
-SCAN = 'sub-NC189_ses-20180825_acq-nomotion_run-01_T1w.nii'
-#MRI_PATH='Users/Tim/Desktop/Code/Machine_Learning/TZO/NYU/zhao_dataset_20181011/sub-NC225/ses-20180802/anat/'
-#SCAN = 'sub-NC225_ses-20180802_acq-nomotion_run-01_T1w.nii'
-"""
-Others
-"""
-# MRI_PATH = '/Users/yzhao11/Documents/Research/MachineLearning/MRI/zhao_dataset_20181011/sub-NC189/ses-20180825/anat/';
-# SCAN = 'sub-NC189_ses-20180825_acq-motion_run-01_T1w.nii'
-
-
-# MRI_PATH = '/Users/yzhao11/Documents/Research/MachineLearning/MRI/zhao_dataset_20181011/sub-NC188/ses-20180825/anat/';
-# SCAN = 'sub-NC188_ses-20180825_acq-nomotion_run-01_T1w.nii'
-
-
-# MRI_PATH = '/Users/yzhao11/Documents/Research/MachineLearning/MRI/zhao_dataset_20181011/sub-NC183/ses-20180825/anat/';
-# SCAN = 'sub-NC183_ses-20180825_acq-nomotion_run-02_T1w.nii'
-
-
-mri = ld.mri_scan(MRI_PATH + SCAN);
-img = mri.get_image(80, 'y');
-#
-cV = convolver(img, 16); # kernel size
-#convolutions = cV._generate_random_convolutions(5, 16);
-#convolutions = cV._generate_random_lconv(6, 9);
-###
-#cV.display(convolutions, 0, 9, show_kernel=True); # start index, number of images
-
-
-# GOOD Matrx
-#CC = np.array([[0.        , 0.        , 0.        , 0.        , 0.        ,  0.        , 0.        , 0.        , 0.        ],
-#       [0.        , 0.11111111, 0.        , 0.11111111, 0.        ,   0.11111111, 0.        , 0.        , 0.        ],
-#       [0.        , 0.        , 0.        , 0.        , 0.        ,   0.        , 0.        , 0.        , 0.        ],
-#       [0.        , 0.11111111, 0.        , 0.        , 0.        ,   0.        , 0.        , 0.        , 0.        ],
-#       [0.        , 0.        , 0.11111111, 0.        , 0.        ,   0.        , 0.        , 0.        , 0.        ],
-#       [0.        , 0.        , 0.        , 0.        , 0.        ,   0.        , 0.        , 0.        , 0.        ],
-#       [0.        , 0.        , 0.        , 0.        , 0.        ,   0.        , 0.        , 0.        , 0.11111111],
-#       [0.        , 0.        , 0.        , 0.        , 0.        ,   0.        , 0.        , 0.        , 0.11111111],
-#       [0.        , 0.        , 0.        , 0.        , 0.11111111,   0.        , 0.        , 0.11111111, 0.        ]]);
-
-#CC = np.array([[0.        , 0.        , 0.        , 0.        , 0.        ,  0.        , 0.        , 0.        , 0.        ],
-#       [0.        , 0.        , 0.        , 0.        , 0.        ,   0.        , 0.        , 0.        , 0.        ],
-#       [0.        , 0.        , 0.1111111         , 0., 0.1111111 ,   0.        , 0.11111111       , 0.        , 0.        ],
-#       [0.        , 0.        , 0.        , 0.        , 0.        ,   0.        , 0.        , 0.        , 0.        ],
-#       [0.        , 0.        , 0.1111111 , 0.        , 0.        ,   0.        , 0.        , 0.        , 0.        ],
-#       [0.        , 0.        , 0.        , 0.1111111 , 0.        ,   0.        , 0.        , 0.        , 0.        ],
-#       [0.        , 0.        , 0.        , 0.        , 0.        ,   0.        , 0.        , 0.        , 0.11111111],
-#       [0.        , 0.        , 0.        , 0.        , 0.        ,   0.        , 0.        , 0.        , 0.11111111],
-#       [0.        , 0.        , 0.        , 0.        , 0.11111111,   0.        , 0.        , 0.11111111, 0.        ] ]);
-#
-
-CC = np.array([[0.        , 0.        , 0.        , 0.        , 0.        ,   0.        , 0.        , 0.        , 0.      ],
-               [0.        , 0.        , 0.        , 0.        , 0.        ,   0.        , 0.        , 0.1111111 ,        0.        ],
-               [0.        , 0.        , 0.        , 0.        , 0.        ,   0.        , 0.        , 0.        , 0         ],
-               [0.        , 0.        , 0.        , 0.        , 0.        ,   0.        , 0.        , 0.        , 0.       ],
-               [0.        , 0.        , 0.        , 0.        , 0.111111  ,   0.        , 0.        , 0.        , 0.       ],
-               [0.        , 0.        , 0.        , 0.        , 0.        ,   0.        , 0.        , 0.        , 0.        ],
-               [0.        , 0.        , 0.        , 0.        , 0.        ,   0.        , 0.        , 0.         , 0.        ],
-               [0.        , 0.111111  , 0.        , 0.        , 0.        ,   0.        , 0.        , 0.        , 0.        ],
-               [0.        , 0.        , 0.        , 0.        , 0.        ,   0.        , 0.        , 0.        , 0.]]);
-
-
-CC2 = np.array([[0.        , 0.        , 0.        , 0.        , 0.        ,
-    0.        , 0.        , 0.        , 0.        ],
-   [0.33333333, 0.        , 0.        , 0.        , 0.        ,
-    0.        , 0.        , 0.        , 0.        ],
-   [0.        , 0.        , 0.        , 0.        , 0.        ,
-    0.        , 0.        , 0.        , 0.        ],
-   [0.        , 0.        , 0.        , 0.        , 0.        ,
-    0.        , 0.        , 0.        , 0.        ],
-   [0.        , 0.        , 0.        , 0.        , 0.        ,
-    0.        , 0.        , 0.        , 0.        ],
-   [0.        , 0.        , 0.33333333, 0.        , 0.        ,
-    0.        , 0.        , 0.        , 0.33333333],
-   [0.        , 0.        , 0.        , 0.        , 0.        ,
-    0.        , 0.        , 0.        , 0.        ],
-   [0.        , 0.        , 0.        , 0.        , 0.        ,
-    0.        , 0.        , 0.        , 0.        ],
-   [0.        , 0.        , 0.        , 0.        , 0.        ,
-    0.        , 0.        , 0.        , 0.        ]]);
-
-CC4 = np.array([[0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.33333333,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.33333333, 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.33333333,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ]])
-
-
-CC5 = np.array([[0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.33333333],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.33333333, 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.33333333, 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ]])
-
-CC6 = np.array([[0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.33333333, 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.33333333, 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.33333333,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ]])
-
-
-CC7 = np.array([[0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.33333333,
-        0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        ],
-       [0.33333333, 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.33333333, 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        ]])
-
-CC8 = np.array([[0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0.2, 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0.2, 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0.2, 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ]]);
-
-CC9 = np.array([[0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.422222  , 0.    , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.33333333, 0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.44444   , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        ]]);
-
-CC13 = np.array([[0.        , 0.        , 0.        , 0.33333333, 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.33333333, 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.33333333, 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        ]]);
-
-DD1 =  np.array([[0. , 0. , 0. , 0. , 0. , 0.2, 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0.2, 0. , 0. , 0. , 0.2, 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0.2, 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0.2, 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ]]);
-
-DD2 =  np.array([[0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0.2],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0.2, 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0.2, 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0.2, 0. , 0. , 0. , 0.2, 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ]])
-
-
-DD3 = np.array([[0. , 0. , 0. , 0.2, 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0.2, 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0.2, 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0.2, 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0.2, 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ]])
-
-
-DD4 = np.array([[0. , 0. , 0. , 0. , 0. , 0. , 0.2, 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0.2],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0.2, 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0.2, 0. ],
-       [0.2, 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ]])
-
-EE1 = np.array([[0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.16666667, 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.16666667,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.16666667,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.16666667, 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.16666667, 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.16666667, 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ]]);
-
-CC15 = np.array([[0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.16666667, 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.16666667, 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.16666667, 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.16666667,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.16666667,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.16666667, 0.        , 0.        ,
-        0.        ]]);
-
-
-CC16 = np.array([[0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.16666667],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.16666667, 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.16666667, 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.16666667, 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.16666667, 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.16666667, 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ],
-       [0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        , 0.        , 0.        , 0.        , 0.        ,
-        0.        ]])
-
-CC17 = np.array([[0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0.2, 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0.2, 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0.2, 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0.2, 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0.2, 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ],
-       [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ,
-        0. , 0. , 0. ]])
-
-# Good result:
-CC18 = np.array([[0. , 0. , 0. , 0. , 0. , 0. , 0. , 0.2 , 0.2 , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0.  , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0.5 , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0.5 , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ]])
-
-
-CC19 = np.array([[0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0.25 , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0.25 , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0.25 , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0.25 , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ]])
-
-# This with entry no.4 at 0.74 everything else at 1.00
-CC20 = np.array([[0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0.3 , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0.3 , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0.1 , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0.1 , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0.5 , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ],
-                 [0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. , 0. ]])
-
-CC21 = CC20.T
-
-
-DD5 = np.flip(DD4, axis=1);
-# print(repr(CC10));
-
-#cV.display_single(CC13);
 
 """
 Given an array, reflects the value of each entry over the horizontal line
@@ -926,7 +537,7 @@ def generate_random_kernels():
     radius2 = np.random.randint(6,8)
     #radius = 5
     points_per_kernel = 5
-    #
+
     # print("size: 16")
     # print("num_curves: " + str(num_curves))
     # print("points_per_kernel: " + str(points_per_kernel))
@@ -936,6 +547,7 @@ def generate_random_kernels():
     # print("Interval: " + str(interval))
     return generate_kernels_parametric(16, num_curves, points_per_kernel, radius1, radius2, [coeff1, coeff2], interval)
 
+ 
 """
 Generates a list of 2D kernels by taking time slices of a parametric equation of the form
 x = c + a * sin(b * pi * t)
@@ -1011,8 +623,7 @@ class Mask:
         self.exponent = exponent;
         self.kappa = kappa;
         self.mask = self.generate_blend_mask(m,n,offset,exponent,kappa);
-        
-        
+
 
     """
     Generates a window according to the Super-Gaussian formula:
@@ -1062,7 +673,7 @@ class Mask:
             for j in range(len(convolved[0])):
                 convolved[i][j] = self.mask[i][j] * convolved[i][j] + (1 - self.mask[i][j]) * orig[i][j];
         return convolved;
-    
+
     """
     Plots the mask associated with this class
     """
@@ -1161,8 +772,151 @@ def generate_blended_distorted_images(img, N):
 
     return imarr;
 
+##############################################################################
+##############################################################################
 
-if __name__ == "__main__":
+# MRI_PATH = '/Users/yzhao11/Documents/Research/MachineLearning/Coregistered/';
+# SCAN = 'aligned188ToNoMotionRun01.nii'
+
+if __name__ == '__main__':
+    np.set_printoptions(linewidth = 160);
+    MRI_PATH='/Users/yzhao11/Documents/Research/MachineLearning/MRI/zhao_dataset_20181011/sub-NC188/ses-20180825/anat/';
+    SCAN = 'sub-NC188_ses-20180825_acq-nomotion_run-01_T1w.nii';
+    
+    # MRI_PATH = '/Users/yzhao11/Documents/Research/MachineLearning/MRI/zhao_dataset_20181011/sub-NC189/ses-20180825/anat/';
+    # SCAN = 'sub-NC189_ses-20180825_acq-motion_run-01_T1w.nii'
+    
+        
+    # MRI_PATH = '/Users/yzhao11/Documents/Research/MachineLearning/MRI/zhao_dataset_20181011/sub-NC188/ses-20180825/anat/';
+    # SCAN = 'sub-NC188_ses-20180825_acq-nomotion_run-01_T1w.nii'
+    
+         
+    # MRI_PATH = '/Users/yzhao11/Documents/Research/MachineLearning/MRI/zhao_dataset_20181011/sub-NC183/ses-20180825/anat/';
+    # SCAN = 'sub-NC183_ses-20180825_acq-nomotion_run-02_T1w.nii'  
+    rotation_test = False;
+    if (rotation_test):
+        cc9 = np.array([[0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        ],
+           [0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        ],
+           [0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.33333333, 0.        , 0.        ],
+           [0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        ],
+           [0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        ],
+           [0.        , 0.        , 0.        , 0.        , 0.33333333, 0.        , 0.        , 0.        , 0.        ],
+           [0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        ],
+           [0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        ],
+           [0.        , 0.33333333, 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        ]]);
+       
+        II = np.identity(11);
+        
+        U = convolver._rotate_ccw(II, np.pi/2);
+        print('\n')
+        print(II);
+        print('\n\n');
+        print(U);
+        sys.exit(0);
+        
+        
+    phantom_test = False;
+    if (phantom_test == True):
+        T = circulant(np.arange(11));
+        tC = convolver(T, 5);
+        kernel = np.identity(5);
+        kernel = convolver._rotate_ccw(kernel, np.pi/2);
+        pixel_x = 5;
+        pixel_y = 5;
+        P = tC._get_phantom_submatrix(kernel, pixel_x, pixel_y);
+        print('\n');
+        print(kernel);
+        print('\n');
+        print(tC.img_);
+        print('\n');
+        print(P);
+        print('\n');
+        cx = tC._convolve_pixel(kernel, pixel_x, pixel_y);
+        print(cx);
+        angl = tC._get_angle(10, 10, 10);
+        print('The angle is ' + str(angl))
+        sys.exit(0);
+        
+    shrinkage_test = False;
+    if (shrinkage_test):
+        T = circulant(np.arange(21));
+        ignore = 5;
+        tC = convolver(T, ignore);
+        kernel = np.identity(11);
+        kernel = convolver._rotate_ccw(kernel, np.pi/2);
+        print('\n');
+        print(kernel); print('\n');
+        print(tC.img_); print('\n');
+        new_kern = tC._shrink_kernel(kernel, 15, 8, 21);
+        print(new_kern);
+        sys.exit(0);
+        
+        
+    flip_test = False;
+    if (flip_test):
+        M = np.array([[1,1,1],
+             [1,1,0],
+             [1,0,0]]);
+             
+        MM = convolver._flip_diag(M, 'NW');
+        print('\n');
+        print(M);
+        print('\n')
+        print(MM);
+        sys.exit(0);
+        
+    
+    mri = ld.mri_scan(MRI_PATH + SCAN);
+    img = mri.get_image(107, 'x'); #crop_center = (0,0), crop_wh = (200, 200));
+
+    cV = convolver(img, 16); # kernel size
+
+    # Example of using display:
+    #convolutions = cV._generate_random_convolutions(5, 16);
+    #convolutions = cV._generate_random_lconv(6, 9);
+    ###
+    #cV.display(convolutions, 0, 9, show_kernel=True); # start index, number of images
+
+    # Example of using display_single
+    # DD5 = np.flip(DD4, axis=1);
+    # print(repr(CC10));   
+    #cV.display_single(CC13);
+    
+    CC17 = np.array([[0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  ],
+       [0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.25, 0.  , 0.  , 0.  ],
+       [0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  ],
+       [0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  ],
+       [0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  ],
+       [0.  , 0.  , 0.25, 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  ],
+       [0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  ],
+       [0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  ],
+       [0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  ],
+       [0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  ],
+       [0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.25, 0.  , 0.  , 0.  , 0.  ],
+       [0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.25, 0.  , 0.  ],
+       [0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  ],
+       [0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  ],
+       [0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  ],
+       [0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  ]])
+    
+    test_var_conv = True;
+    if (test_var_conv):
+       # II = np.zeros([9,9]);
+       # II[4,2] = 0.3333;  II[4,5] = 0.3333;  II[4,6] = 0.3333; 
+       # print(II);
+        NN, MM = cV.img_.shape;
+        new_image = cV.var_convolve(CC17, cV._symmetric_precession, user_data = int(NN));
+        fig, ax = plt.subplots(1, 2, figsize = (15, 8));
+        ax[0].imshow(cV.img_);
+        ax[1].imshow(new_image);
+        plt.show();
+        sys.exit(0);
+        
+
+    # CC17 = convolver._rotate_ccw(CC17, np.pi/3);
+    cV.tuner(CC17);
+    plt.show();
+    
     print("hello");
     #a = np.random.randint(1,10) / 10;
     #m = Mask(30,30,[0,0],5, 0.03);
@@ -1225,14 +979,3 @@ if __name__ == "__main__":
 #               [0, 0, 0, 1, 0, 0, 0, 0]]) * (1/14.0);
 
 
-"""
-################### OLD CODE ##########################
-img_conv = signal.convolve2d(img, conv, boundary = 'symm', mode='same');
-
-
-fig = plt.figure(figsize=(10,10));
-plt.imshow(img_conv)
-plt.show();
-
-#######################################################
-"""
