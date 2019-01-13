@@ -19,8 +19,6 @@ import Transformer as td;
 from matplotlib.widgets import Slider;
 from scipy.linalg import circulant
 from mpl_toolkits.mplot3d import Axes3D;
-# import ImagePairCheck as ipc
-
 
 
 """
@@ -36,7 +34,7 @@ class convolver:
             print ('convolver.convolver: the size of the kernel should be >= 2.',
                    sys.stderr);
             sys.exit(-1);
-
+            
         self.img_     = image;
         self.size_    = size;
 
@@ -148,32 +146,32 @@ class convolver:
             SS = np.sum(conv_arr[s,:,:]);
             print ('Dividing by '+ str(SS))
             conv_arr[s, :, :] = conv_arr[s,:,:] * (1.0/float(SS));
-
-        return conv_arr;
-
+        
+        return conv_arr; 
+    
     """
     Auxiliary function to extract a submatrix S from a given image. The retrieved
     submatrix is intended to be later convolved with the given kernel.
     S's size will be the same as that of K and S's entries will
     depend on the pixel around which S is centered. If S "sticks" out of the image, 0's will
     be used as image's pixel values.
-
+    
     kernel  -- the kernel which (later) will be convolved with the image
     pixel_x -- row of the point in the image over which kernel's center is superimposed
     pixel_y -- column of the point in the image over which kernel's center is superimposed
-
+    
     """
     def _get_phantom_submatrix(self, kernel, pixel_x, pixel_y):
         K, ignore = kernel.shape;
         phantom = np.zeros([K, K]);
-
+        
         i  = pixel_x; j = pixel_y;
         C  = int(np.ceil((K/2) - 1));
         C_ = int(np.floor(K/2));
-
+        
         N, M = self.img_.shape;
-
-        # Let's fill the matrix
+        
+        # Let's fill the matrix 
         for s in np.arange(-C, C_+1):
             if (i + s < 0 or i + s > N - 1 ):
                 continue;
@@ -181,9 +179,9 @@ class convolver:
                 if (j + r < 0 or j + r > M - 1):
                     continue;
                 phantom[C+s, C+r] = self.img_[i+s, j+r];
-
+                
         return phantom;
-
+    
     # Flip a matrix about diagonal
     @staticmethod
     def _flip_diag(matrix, diag):
@@ -191,17 +189,17 @@ class convolver:
         new_matrix = np.zeros([N, M]);
         [idx_x, idx_y] = np.nonzero(matrix);
         K = len(idx_x);
-
+        
         if (diag == 'NE'): # Top points to NE
             for k in np.arange(K):
                 new_matrix[N - idx_x[k]-1, M - idx_y[k] - 1] = \
                 matrix[idx_x[k], idx_y[k]];
         else:
              new_matrix = np.transpose(matrix);
-
+                
         return new_matrix;
-
-
+                
+        
     def _convolve_pixel(self, kernel, pixel_x, pixel_y, diag_flip = False):
         if (diag_flip):
             kernel = convolver._flip_diag(kernel, 'NE');
@@ -214,18 +212,18 @@ class convolver:
 #        print('\n');
         res = np.sum(np.sum(res));
         return(res);
-
-
-
+        
+        
+        
     @staticmethod
     def _rotate_ccw(kernel, angle_rad):
         K, ignore = kernel.shape;
         new_kernel = np.zeros([K, K]);
         NN = np.count_nonzero(kernel);
-
+          
         C  = int(np.ceil((K/2) - 1));
         C_ = int(np.floor(K/2));
-
+          
         for s in np.arange(-C, C_+1):
             for r in np.arange(-C, C_+1):
                   # Need to use ceil/floor and eliminate value that stick out
@@ -245,27 +243,27 @@ class convolver:
         ss = np.sum(new_kernel);
         new_kernel /= ss;
         return new_kernel;
-
+    
     """
     We're given an N x M image (matrix) I and a point (i, j) in it. We define
     "center" MID of I as  MID = (R, C) where C = ceil( (M/2) - 1  ) (Note that R is
     really intended to be >= N )
-
-    We want to know what is the angle < pi formed by 1) the vertical line passing
+    
+    We want to know what is the angle < pi formed by 1) the vertical line passing 
     through MID and 2) the line passing through MID and the point (p, q). Directions
     to the left from the line 1) are positive, while those to the right negative.
     """
-
+                
     def _get_angle(self, pixel_x, pixel_y, R): # R should be N
         i = pixel_x;
         j = pixel_y;
-
+        
         N, M  = self.img_.shape;
         C     =   int(np.ceil((M/2) - 1));
         sign  = np.sign(C - j);
         hpnse = np.sqrt( (C-j)**2 + (R-i)**2);
         adjcn = R - i;
-
+        
         angle = 0;
         if (hpnse != 0):
             angle = np.arccos(adjcn/hpnse);
@@ -273,7 +271,7 @@ class convolver:
 
     """
     Let's assume that the image width is M. As in the _get_angle function, we define
-    the special center as a point MID = (radius, M/2 ).
+    the special center as a point MID = (radius, M/2 ). 
     This function shrinks the kernel in way that is proportional to the distance
     between the kernel center (p, q) and the MID. That is at the kernel gets
     smaller and smaller as we approach MID at which point its support becomes
@@ -282,15 +280,15 @@ class convolver:
     def _shrink_kernel(self, kernel, pixel_x, pixel_y, R):
         p = pixel_x;
         q = pixel_y;
-
+        
         N, M  = self.img_.shape;
-        C     =   int(np.ceil((M/2) - 1));
-
+        C     =   int(np.ceil((M/2) - 1)); 
+        
         # The distance of the tl vertex to the MID point
         MX = np.sqrt(C**2 + N**2);
         DX = np.sqrt((C - q)**2 + (R - p)**2);
         ratio = DX/MX;
-
+        
         # Now apply the "ratio" to the (square) kernel
         K, ignore = kernel.shape;
         Ck  = int(np.ceil((K/2) - 1));
@@ -303,16 +301,16 @@ class convolver:
             new_u = Ck  + int(np.rint(ratio*(nnz_x[i] - Ck)));
             new_v = Ck_ + int(np.rint(ratio*(nnz_y[i] - Ck_)));
             new_kernel[new_u, new_v] = kernel[nnz_x[i], nnz_y[i]];
-
-
+        
+        
         # Make sure that the entries of a kernel add up to 1
         ss = np.sum(new_kernel);
         new_kernel /= ss;
         return new_kernel;
-
+    
     """
-    Rotation and shrinking is applied to the given kernel. The parameters
-    of rotation depend on the pixel in the image we are over, and the the
+    Rotation and shrinking is applied to the given kernel. The parameters 
+    of rotation depend on the pixel in the image we are over, and the the 
     position of the MID (the center referred to in the above functions)
     """
     def _symmetric_precession(self, kernel, pixel_x, pixel_y, R):
@@ -320,15 +318,15 @@ class convolver:
          kernel1 = self._rotate_ccw(kernel, angle);
          kernel2 = self._shrink_kernel(kernel1, pixel_x, pixel_y, R);
          return kernel2;
-
+        
     """
     Given a kernel apply it to the underlying image in a convolution like manner,
     but the kernel is morphed as we slide it over the matrix. Let's say that the
     size of the image is N.
-
+    
     1) The kernel is not modifed at pixel (0, N/2) and for all rows i > radius
        (radius is a peramater and generally is thought to be > N)
-
+                
     2) As we deviate from the line j = N/2 the kernel's support is rotated by the
        angle proportional to the angle between the following two lines:
            a) theline formed by the convolved pixel and point with coordinagtes
@@ -338,7 +336,7 @@ class convolver:
     3) Good to have: to account for the limited angular rotation of a human head, we cap
        the angle of rotation at the value that comes from the deviation angle of
        arctan[ (N/2 / radius) ] (angle given by the tl corner of the image)
-
+       
     4) As the convolved pixel moves from row i = 0 to row i = radius, the support of
        the kerner shrinks "perspectively" along the line connecting the convolved
        pixel and the point (radius, N/2);
@@ -351,9 +349,9 @@ class convolver:
                 kern_local = precession_func(kernel, p, q, user_data);
                 val = self._convolve_pixel(kern_local, p, q);
                 new_image[p, q] = val;
-
+                
         return new_image;
-
+        
     """
     Display convolutions with kernels givven conv_arr in a grid form.
     That is both the kernel and its effect on the underlying image will be shown
@@ -376,7 +374,7 @@ class convolver:
         Q = 0;
 
         if (show_kernel):
-            Q = 1;
+            Q = 1; 
 
         fig, axarr = plt.subplots(D, (Q+1)*D, figsize=(12, 12));
         for q in range(D):
@@ -418,7 +416,7 @@ class convolver:
     """
     def tuner(self, kernel):
          m, n = kernel.shape;
-
+         
          if (m != self.size_ or n != self.size_):
              print('convolver.tuner: the kernel must be of size (' + str(self.size_) + ', ' +  str(self.size_) + ').',
                    sys.stderr);
@@ -548,7 +546,7 @@ def generate_random_kernels():
     # print("Interval: " + str(interval))
     return generate_kernels_parametric(16, num_curves, points_per_kernel, radius1, radius2, [coeff1, coeff2], interval)
 
-
+ 
 """
 Generates a list of 2D kernels by taking time slices of a parametric equation of the form
 x = c + a * sin(b * pi * t)
@@ -579,7 +577,7 @@ def generate_kernels_parametric(size, num_curves, points_per_kernel, radius1, ra
 
 
 """
-Generates N distorted images based on a single clear image by convolving it
+Generates N distorted images based on a single clear image by convolving it 
 with random 2D kernels
 Input: A numpy 2D array: img
        Number of distorted images to generate: N
@@ -708,7 +706,7 @@ class Mask:
         self.surf.remove();
         self.surf = self.ax.plot_surface(self.X,self.Y,self.mask, color = 'BLUE');
         self.fig.canvas.draw();
-
+    
     def update_exponent(self,val):
         self.exponent = val;
         self.mask = self.generate_blend_mask(self.height, self.width, self.offset, val, self.kappa);
@@ -753,7 +751,7 @@ Output: An image array storing the distorted images. Shape is (img.x,img.y,N)
 def generate_blended_distorted_images(img, N):
     x,y = img.shape;
     imarr = np.zeros((x,y,N));
-
+    
     kernels = set();
     while len(kernels) < N:
         if (len(kernels) % 500 == 0):
@@ -773,17 +771,14 @@ def generate_blended_distorted_images(img, N):
 
     return imarr;
 
-def generate_blended_images_constant_kernel(img,N):
+
+def generate_blended_images_constant_kernel(img,N,kernel):
     x,y = img.shape;
     imarr = np.zeros((x,y,N));
 
     #kernel = generate_kernels_parametric(16,1,5,8,8,[6,5],[0,0.1])[0]
     #print(kernel.shape)
-    kernel = np.zeros((16,16))
-    kernel[15,15] = 0.25
-    kernel[12,12] = 0.25
-    kernel[5,5] = 0.25
-    kernel[2,2] = 0.25
+    
     for i in range(N):
         x1 = np.random.randint(-int(x/4), int(x/4))
         x2 = np.random.randint(-int(y/4), int(y/4))
@@ -794,30 +789,55 @@ def generate_blended_images_constant_kernel(img,N):
 
     return imarr;
 
-
 ##############################################################################
 ##############################################################################
 
 # MRI_PATH = '/Users/yzhao11/Documents/Research/MachineLearning/Coregistered/';
 # SCAN = 'aligned188ToNoMotionRun01.nii'
 
+
+
 if __name__ == '__main__':
     np.set_printoptions(linewidth = 160);
+
+    timmy_test = False;
+    if (timmy_test):
+        MRI_PATH = 'C:/Users/Tim/Desktop/Code/Machine_Learning/TZO/NYU/zhao_dataset_20181011/sub-NC188/ses-20180825/anat/';
+        SCAN = 'sub-NC188_ses-20180825_acq-nomotion_run-01_T1w.nii'
+        mri = ld.mri_scan(MRI_PATH + SCAN);
+        img = mri.get_image(100, 'x');
+
+        kernel = np.zeros((16,16))
+        kernel[10,3] = 0.2
+        kernel[12,12] = 0.2
+        kernel[5,5] = 0.2
+        kernel[2,2] = 0.2
+        kernel[3,10] = 0.2
+
+        print(kernel)
+        imarr = generate_blended_distorted_images(img,10);
+
+        img = np.repeat(img[:, :, np.newaxis], 10, axis=2)
+
+        VRF = ipc.verifier(img, imarr);
+        VRF.initialize();
+        plt.show();
+        # m = Mask(30,30,[4,4],5, 0.03);
+        # m.plot_mask();
+        # exit(-1);
     #MRI_PATH='/Users/yzhao11/Documents/Research/MachineLearning/MRI/zhao_dataset_20181011/sub-NC188/ses-20180825/anat/';
     #SCAN = 'sub-NC188_ses-20180825_acq-nomotion_run-01_T1w.nii';
-
+    
     # MRI_PATH = '/Users/yzhao11/Documents/Research/MachineLearning/MRI/zhao_dataset_20181011/sub-NC189/ses-20180825/anat/';
     # SCAN = 'sub-NC189_ses-20180825_acq-motion_run-01_T1w.nii'
-
-
+    
+        
     # MRI_PATH = '/Users/yzhao11/Documents/Research/MachineLearning/MRI/zhao_dataset_20181011/sub-NC188/ses-20180825/anat/';
     # SCAN = 'sub-NC188_ses-20180825_acq-nomotion_run-01_T1w.nii'
-
-
-    MRI_PATH = '/Users/jossowski/Desktop/Fordham/NYU/zhao_dataset_20181011/sub-NC188/ses-20180825/anat/';
-    SCAN = 'sub-NC188_ses-20180825_acq-motion_run-01_T1w.nii'
-
-
+    
+         
+    # MRI_PATH = '/Users/yzhao11/Documents/Research/MachineLearning/MRI/zhao_dataset_20181011/sub-NC183/ses-20180825/anat/';
+    # SCAN = 'sub-NC183_ses-20180825_acq-nomotion_run-02_T1w.nii'  
     rotation_test = False;
     if (rotation_test):
         cc9 = np.array([[0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        ],
@@ -829,17 +849,17 @@ if __name__ == '__main__':
            [0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        ],
            [0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        ],
            [0.        , 0.33333333, 0.        , 0.        , 0.        , 0.        , 0.        , 0.        , 0.        ]]);
-
+       
         II = np.identity(11);
-
+        
         U = convolver._rotate_ccw(II, np.pi/2);
         print('\n')
         print(II);
         print('\n\n');
         print(U);
         sys.exit(0);
-
-
+        
+        
     phantom_test = False;
     if (phantom_test == True):
         T = circulant(np.arange(11));
@@ -861,7 +881,7 @@ if __name__ == '__main__':
         angl = tC._get_angle(10, 10, 10);
         print('The angle is ' + str(angl))
         sys.exit(0);
-
+        
     shrinkage_test = False;
     if (shrinkage_test):
         T = circulant(np.arange(21));
@@ -875,26 +895,26 @@ if __name__ == '__main__':
         new_kern = tC._shrink_kernel(kernel, 15, 8, 21);
         print(new_kern);
         sys.exit(0);
-
-
+        
+        
     flip_test = False;
     if (flip_test):
         M = np.array([[1,1,1],
              [1,1,0],
              [1,0,0]]);
-
+             
         MM = convolver._flip_diag(M, 'NW');
         print('\n');
         print(M);
         print('\n')
         print(MM);
         sys.exit(0);
+        
+    
+    # mri = ld.mri_scan(MRI_PATH + SCAN);
+   # img = mri.get_image(107, 'x'); #crop_center = (0,0), crop_wh = (200, 200));
 
-
-    mri = ld.mri_scan(MRI_PATH + SCAN);
-    img = mri.get_image(107, 'x'); #crop_center = (0,0), crop_wh = (200, 200));
-
-    cV = convolver(img, 16); # kernel size
+   # cV = convolver(img, 16); # kernel size
 
     # Example of using display:
     #convolutions = cV._generate_random_convolutions(5, 16);
@@ -904,9 +924,9 @@ if __name__ == '__main__':
 
     # Example of using display_single
     # DD5 = np.flip(DD4, axis=1);
-    # print(repr(CC10));
+    # print(repr(CC10));   
     #cV.display_single(CC13);
-
+    
     CC17 = np.array([[0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  ],
        [0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.25, 0.  , 0.  , 0.  ],
        [0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  ],
@@ -923,11 +943,11 @@ if __name__ == '__main__':
        [0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  ],
        [0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  ],
        [0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  , 0.  ]])
-
+    
     test_var_conv = False;
     if (test_var_conv):
        # II = np.zeros([9,9]);
-       # II[4,2] = 0.3333;  II[4,5] = 0.3333;  II[4,6] = 0.3333;
+       # II[4,2] = 0.3333;  II[4,5] = 0.3333;  II[4,6] = 0.3333; 
        # print(II);
         NN, MM = cV.img_.shape;
         new_image = cV.var_convolve(CC17, cV._symmetric_precession, user_data = int(NN));
@@ -936,22 +956,22 @@ if __name__ == '__main__':
         ax[1].imshow(new_image);
         plt.show();
         sys.exit(0);
-
+        
 
     # CC17 = convolver._rotate_ccw(CC17, np.pi/3);
-    #cV.tuner(CC17);
-    #plt.show();
-
+    # cV.tuner(CC17);
+    # plt.show();
+    
     #print("hello");
     #a = np.random.randint(1,10) / 10;
-    #m = Mask(30,30,[0,0],5, 0.03);
+    # m = Mask(30,30,[0,0],5, 0.03);
     #show_mask(generate_blend_mask(30,30,[15,15],3, 0.025));
     # mri = ld.mri_scan(MRI_PATH + SCAN);
     # img = mri.get_image(100, 'x');
-    # imarr = generate_blended_images_constant_kernel(img,10);
-    #
+    # imarr = generate_blended_distorted_images(img,10);
+
     # img = np.repeat(img[:, :, np.newaxis], 10, axis=2)
-    #
+
     # VRF = ipc.verifier(img, imarr);
     # VRF.initialize();
     # plt.show();
@@ -1002,3 +1022,4 @@ if __name__ == '__main__':
 #               [0, 1, 0, 0, 0, 0, 0, 0],
 #               [0, 0, 1, 0, 0, 1, 0, 0],
 #               [0, 0, 0, 1, 0, 0, 0, 0]]) * (1/14.0);
+
