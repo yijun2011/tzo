@@ -12,6 +12,8 @@ import math;
 import Loader as ld;
 import matplotlib.pyplot as plt;
 import Transformer;
+import Convolver;
+import scipy.signal;
 
 class Combiner:
     def __init__(self, img1, img2):
@@ -142,15 +144,28 @@ class Combiner:
     f_max is the fraction of max(img.shape) that the larger of the radii of 
           distorion circles will have
           
+    These lines of code explain the action of f_min, f_max (R1, R2 are the radii)
+    R1 = int(f_min*np.amin([r,c]));
+    R2 = int(f_max*np.amin([r,c]));
+          
     num_circ_min is the minimal number of distortion circles that will be generated
     
     num_circ_max is the maximal number of circles that will be generated
+    *******************************
+    
+    aux_img -- an image I2 which meant to 1) be distorted by transf specified by the
+             previous parameters, and 2) overlayed over the original image in the 
+             spots specified by the previous params. Normally I2 will be the original
+             image itself (in other words we're simply distorting the original image).
+             The need for this parameter arose out of the need to combine different types
+             of distortions and I2 is really meant to be the original image distorted by
+             a different independent transformation.
     """
     @staticmethod
     def loop_example_transf1(img, radii_t, phase_p, center, ampl_p, sector_t, num_img=4,
                              df_range = 10, ph_range = 3, amp_range = 3, sec_range = 10,
                              f_min=0.1, f_max=0.3, num_circ_min=1, num_circ_max=4,
-                             ):
+                             aux_img = []):
         if (len(radii_t) != 3):
             print('Combiner.loop_exampe_transf1: the radii argument must be a tripple.',
                   sys.stderr);
@@ -182,8 +197,12 @@ class Combiner:
         
         r, c = img.shape;
         aout = np.zeros([r,c,num_img]);
-        T = Transformer.Transformer(img);
         
+        
+        T = Transformer.Transformer(img);
+        if (len(aux_img) != 0):
+            T = Transformer.Transformer(aux_img);
+           
         img_cntr = 0;
         for s in range(num_img):
             rr = random.randint(-df_range, df_range);
@@ -224,7 +243,7 @@ class Combiner:
 #######################################################################
 #######################################################################
         
-if 0: 
+if __name__ == "__main__": 
     MRI_PATH='/Users/yzhao11/Documents/Research/MachineLearning/MRI/zhao_dataset_20181011/sub-NC188/ses-20180825/anat/';
     SCAN = 'sub-NC188_ses-20180825_acq-nomotion_run-01_T1w.nii';
     # MRI_PATH = '/Users/yzhao11/Documents/Research/MachineLearning/MRI/zhao_dataset_20181011/sub-NC189/ses-20180825/anat/';
@@ -271,11 +290,26 @@ if 0:
     # These are good settings for 100 x 100 images
     # imarr = Combiner.loop_example_transf1(img1, [31, 36, 1], [2.51, 0], [0,0], [8.89, 0], [0.18, 0.67, np.pi/7], 4);
     
-    imarr = Combiner.loop_example_transf1(img1, [61, 66, 1.5], [2.51, 0], [0,0], [8.89, 0], [0.18, 0.67, np.pi/7],
-                                          f_min=0.06, f_max=0.18, num_img = U**2);
     
-    save_path = "/Users/yzhao11/Documents/Research/MachineLearning/MRI/zhao_dataset_20181011/sub-NC188/ses-20180825/anat/";
-    save_file = "1000imagesZ";
+
+    kernel = np.zeros((16,16))
+    kernel[10,3] = 0.2
+    kernel[12,12] = 0.2
+    kernel[5,5] = 0.2
+    kernel[2,2] = 0.2
+    kernel[3,10] = 0.2
+    
+    # The below code uses Timek's masking mechannism; I actually do not need it
+    """
+    aux_img= Convolver.generate_blended_images_constant_kernel(img1, 1, kernel);
+    aux_img = aux_img[:,:, 0];
+    """
+    aux_img = scipy.signal.convolve2d(img1, kernel, boundary = 'symm', mode='same');
+    imarr = Combiner.loop_example_transf1(img1, [61, 66, 1.5], [2.51, 0], [0,0], [8.89, 0], [0.18, 0.67, np.pi/7],
+                                          f_min=0.06, f_max=0.18, num_img = U**2, aux_img = aux_img);
+    
+    # save_path = "/Users/yzhao11/Documents/Research/MachineLearning/MRI/zhao_dataset_20181011/sub-NC188/ses-20180825/anat/";
+    # save_file = "1000imagesZ";
     # np.savez_compressed(save_path + save_file, imarr=imarr);
    
 
