@@ -21,6 +21,7 @@ from scipy.linalg import circulant
 from mpl_toolkits.mplot3d import Axes3D;
 
 
+
 """
 The idea for this class is to apply lots of convolutions to an image and see
 what happens.
@@ -771,62 +772,16 @@ def generate_blended_distorted_images(img, N):
 
     return imarr;
 
-
-def generate_blended_images_constant_kernel(img,N,kernel):
-    x,y = img.shape;
-    imarr = np.zeros((x,y,N));
-
-    #kernel = generate_kernels_parametric(16,1,5,8,8,[6,5],[0,0.1])[0]
-    #print(kernel.shape)
-    
-    for i in range(N):
-        x1 = np.random.randint(-int(x/4), int(x/4))
-        x2 = np.random.randint(-int(y/4), int(y/4))
-        mask = Mask(x,y,[x1,x2],np.random.uniform(2, 7),0.03);
-        image = signal.convolve2d(img, kernel, boundary = 'symm', mode='same');
-        image = mask.apply_mask(img, image);
-        imarr[:,:,i] = td.Transformer.hist_match(image,img);
-
-    return imarr;
-
 ##############################################################################
 ##############################################################################
 
 # MRI_PATH = '/Users/yzhao11/Documents/Research/MachineLearning/Coregistered/';
 # SCAN = 'aligned188ToNoMotionRun01.nii'
 
-
-
 if __name__ == '__main__':
     np.set_printoptions(linewidth = 160);
-
-    timmy_test = False;
-    if (timmy_test):
-        MRI_PATH = 'C:/Users/Tim/Desktop/Code/Machine_Learning/TZO/NYU/zhao_dataset_20181011/sub-NC188/ses-20180825/anat/';
-        SCAN = 'sub-NC188_ses-20180825_acq-nomotion_run-01_T1w.nii'
-        mri = ld.mri_scan(MRI_PATH + SCAN);
-        img = mri.get_image(100, 'x');
-
-        kernel = np.zeros((16,16))
-        kernel[10,3] = 0.2
-        kernel[12,12] = 0.2
-        kernel[5,5] = 0.2
-        kernel[2,2] = 0.2
-        kernel[3,10] = 0.2
-
-        print(kernel)
-        imarr = generate_blended_distorted_images(img,10);
-
-        img = np.repeat(img[:, :, np.newaxis], 10, axis=2)
-
-        VRF = ipc.verifier(img, imarr);
-        VRF.initialize();
-        plt.show();
-        # m = Mask(30,30,[4,4],5, 0.03);
-        # m.plot_mask();
-        # exit(-1);
-    #MRI_PATH='/Users/yzhao11/Documents/Research/MachineLearning/MRI/zhao_dataset_20181011/sub-NC188/ses-20180825/anat/';
-    #SCAN = 'sub-NC188_ses-20180825_acq-nomotion_run-01_T1w.nii';
+    MRI_PATH='/Users/yzhao11/Documents/Research/MachineLearning/MRI/zhao_dataset_20181011/sub-NC188/ses-20180825/anat/';
+    SCAN = 'sub-NC188_ses-20180825_acq-nomotion_run-01_T1w.nii';
     
     # MRI_PATH = '/Users/yzhao11/Documents/Research/MachineLearning/MRI/zhao_dataset_20181011/sub-NC189/ses-20180825/anat/';
     # SCAN = 'sub-NC189_ses-20180825_acq-motion_run-01_T1w.nii'
@@ -911,10 +866,10 @@ if __name__ == '__main__':
         sys.exit(0);
         
     
-    # mri = ld.mri_scan(MRI_PATH + SCAN);
-   # img = mri.get_image(107, 'x'); #crop_center = (0,0), crop_wh = (200, 200));
+    mri = ld.mri_scan(MRI_PATH + SCAN);
+    img = mri.get_image(107, 'x'); #crop_center = (0,0), crop_wh = (200, 200));
 
-   # cV = convolver(img, 16); # kernel size
+    cV = convolver(img, 16); # kernel size
 
     # Example of using display:
     #convolutions = cV._generate_random_convolutions(5, 16);
@@ -959,12 +914,12 @@ if __name__ == '__main__':
         
 
     # CC17 = convolver._rotate_ccw(CC17, np.pi/3);
-    # cV.tuner(CC17);
-    # plt.show();
+    cV.tuner(CC17);
+    plt.show();
     
-    #print("hello");
+    print("hello");
     #a = np.random.randint(1,10) / 10;
-    # m = Mask(30,30,[0,0],5, 0.03);
+    #m = Mask(30,30,[0,0],5, 0.03);
     #show_mask(generate_blend_mask(30,30,[15,15],3, 0.025));
     # mri = ld.mri_scan(MRI_PATH + SCAN);
     # img = mri.get_image(100, 'x');
@@ -1022,4 +977,5 @@ if __name__ == '__main__':
 #               [0, 1, 0, 0, 0, 0, 0, 0],
 #               [0, 0, 1, 0, 0, 1, 0, 0],
 #               [0, 0, 0, 1, 0, 0, 0, 0]]) * (1/14.0);
+
 
